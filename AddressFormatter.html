@@ -302,7 +302,7 @@
             let extraStreetPieces = [];
 
             for (const raw of above) {
-                const trimmed = raw.trim();
+                let trimmed = raw.trim();
                 if (!trimmed) continue;
 
                 // CASE1: pattern like "9-31491 SPUR AVE" => unit 9, civic 31491, rest "SPUR AVE"
@@ -318,6 +318,25 @@
                         streetLine = hyCivic + " " + hyRest;
                     }
                     continue; // handled this line
+                }
+
+                // NEW CASE: inline unit inside street line, e.g. "235 FORUM DR UNIT 64"
+                const inlineUnitMatch = trimmed.match(/\b(?:unit|apt|suite)\s*#?\s*(\d+)\b/i);
+                if (inlineUnitMatch) {
+                    const num = inlineUnitMatch[1];
+
+                    // set unit if none yet
+                    if (unit === null) {
+                        unit = num;
+                    }
+
+                    // remove the inline "UNIT 64" so only the actual street remains
+                    trimmed =
+                        (
+                            trimmed.slice(0, inlineUnitMatch.index) +
+                            " " +
+                            trimmed.slice(inlineUnitMatch.index + inlineUnitMatch[0].length)
+                        ).trim();
                 }
 
                 // Explicit unit detection (Unit #, Apt, Suite, etc.)
@@ -515,9 +534,17 @@
 
             // Start RTF document
             let rtf = "{\\rtf1\\ansi\n";
+
+            // Make Arimo the default font AND bold
             rtf += "{\\fonttbl{\\f0 Arimo;}}\n";
-            rtf += "\\paperw5760\\paperh8640\\margl720\\margr720\\margt720\\margb720\n"; // 0.5\" margins
-            rtf += "\\f0\\fs24\n"; // Arimo, 12pt
+
+            // margins, page size
+            rtf += "\\paperw5760\\paperh8640\\margl720\\margr720\\margt720\\margb720\n";
+
+            // DEFAULT TEXT FORMAT: Arimo + Bold + 12pt
+            // \b  = bold on
+            // \fs24 = 12pt
+            rtf += "\\f0\\b\\fs24\n";
 
             blocks.forEach((block, idx) => {
                 const lines = block.split(/\r?\n/);
