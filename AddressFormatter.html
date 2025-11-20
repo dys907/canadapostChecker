@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Canada Post Address Formatter (Offline)</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f5f7;
+            color: #111827;
+        }
+
+        h1 {
+            font-size: 1.6rem;
+            margin-bottom: 0.25rem;
+        }
+
+        p {
+            margin-top: 0.25rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .drop-zone {
+            border: 2px dashed #9ca3af;
+            border-radius: 12px;
+            padding: 30px;
+            text-align: center;
+            background: #ffffff;
+            margin: 20px 0;
+            transition: border-color 0.2s ease, background-color 0.2s ease;
+        }
+
+        .drop-zone.dragover {
+            border-color: #2563eb;
+            background-color: #e0f2fe;
+        }
+
+        .drop-zone strong {
+            display: block;
+            margin-bottom: 6px;
+        }
+
+        .file-input {
+            margin-top: 10px;
+        }
+
+        textarea {
+            width: 100%;
+            height: 220px;
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #d1d5db;
+            resize: vertical;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.9rem;
+        }
+
+        .btn-row {
+            margin-top: 12px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            border: none;
+            border-radius: 9999px;
+            padding: 8px 16px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            background: #2563eb;
+            color: white;
+        }
+
+        button.secondary {
+            background: #6b7280;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: default;
+        }
+
+        .status {
+            margin-top: 8px;
+            font-size: 0.85rem;
+            color: #4b5563;
+        }
+
+        .small {
+            font-size: 0.8rem;
+            color: #6b7280;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Canada Post Address Formatter (Offline)</h1>
+        <p class="small">
+            1 address block per group, separated by a blank line. Drag a <strong>.txt</strong> file below or paste raw
+            text.
+            Output is: name (if present), street line, then CITY PROV&nbsp;&nbsp;POSTAL.
+        </p>
+
+        <div id="dropZone" class="drop-zone">
+            <strong>Drag &amp; drop a .txt file here</strong>
+            <span>or</span><br>
+            <input id="fileInput" class="file-input" type="file" accept=".txt">
+        </div>
+
+        <p><strong>Input Text</strong> (you can also paste here instead of using a file)</p>
+        <textarea id="inputText" placeholder="Paste addresses here..."></textarea>
+
+        <div class="btn-row">
+            <button id="formatBtn">Format Addresses</button>
+            <button id="downloadBtn" class="secondary" disabled>Download Result (.txt)</button>
+            <button id="exportWordBtn" class="secondary" disabled>Export to Word (.doc)</button>
+        </div>
+
+        <p><strong>Formatted Output</strong></p>
+        <textarea id="outputText" readonly placeholder="Formatted addresses will appear here..."></textarea>
+
+        <div id="status" class="status"></div>
+
+        <p class="small">
+            Notes: “Canada” lines, phone numbers, and extra junk lines are removed.
+            Name (first non-numeric line) is kept as the first line. Unit can come from “Unit #24”, “Apt 303”, a
+            hyphenated
+            street like “9-31491 SPUR AVE”, or a standalone numeric line like “303”.
+        </p>
+    </div>
+
+    <script>
+        // --- Address parsing and formatting logic ---
+
+        function extractUnit(line) {
+            // Improved: pick the number right after "unit"/"apt"/"suite"/"#"
+            // Example: "UNIT 117 BUZZER 170" -> 117 (NOT 170)
+            const raw = line.trim();
+            const s = raw.toLowerCase();
+            if (!s) return null;
+
+            const hasKeyword =
+                s.includes("unit") || s.includes("apt") || s.includes("suite") || s.includes("#");
+
+            if (!hasKeyword) {
+                // No unit-related keywords, let other logic (standalone numeric line) handle it
+                return null;
+            }
+
+            const tokens = raw.split(/\s+/);
+            const lowerTokens = tokens.map(t => t.toLowerCase());
+
+            // Find the position of the unit keyword
+            let startIdx = -1;
+            for (let i = 0; i < lowerTokens.length; i++) {
+                const t = lowerTokens[i];
+                if (t.includes("unit") || t.includes("apt") || t.includes("suite") || t.includes("#")) {
+                    startIdx = i;
+                    break;
+                }
+            }
+
+            // Look for the first numeric token AFTER the keyword
+            if (startIdx !== -1) {
+                for (let j = startIdx + 1; j < tokens.length; j++) {
+                    const digits = tokens[j].replace(/\D/g, ""); // handle "117," or "#117"
+                    if (digits && /^\d+$/.test(digits)) {
+                        return digits; // e.g. "117"
+                    }
+                }
+            }
+
+            // Fallback: if somehow no keyword-based number found, return the first numeric token on the line
+            for (let j = 0; j < tokens.length; j++) {
+                const digits = tokens[j].replace(/\D/g, "");
+                if (digits && /^\d+$/.test(digits)) {
+                    return digits;
+                }
+            }
+
+            return null;
+        }
+
+        function normalizeStreet(streetLine) {
+            streetLine = streetLine.trim();
+            if (!streetLine) return { full: "", civic: null, rest: null };
+
+            const parts = streetLine.split(/\s+/);
+            if (parts.length === 0) return { full: "", civic: null, rest: null };
+
+            let civic = null;
+            let rest = streetLine;
+
+            // Civic number as first token
+            if (/^\d+$/.test(parts[0])) {
+                civic = parts[0];
+                rest = parts.slice(1).join(" ");
+            }
+
+            // Basic abbreviations (case-insensitive, EN + some FR)
+            const repl = {
+                "street": "St",
+                "st.": "St",
+                "road": "Rd",
+                "rd.": "Rd",
+                "avenue": "Ave",
+                "ave.": "Ave",
+                "ave": "Ave",
+                "av": "Ave",
+                "av.": "Ave",
+                "boulevard": "Blvd",
+                "blvd.": "Blvd",
+                "drive": "Dr",
+                "dr.": "Dr",
+                "east": "E",
+                "west": "W",
+                "north": "N",
+                "south": "S",
+                "rue": "RUE",         // keep RUE as-is (FR)
+                "chemin": "CH",
+                "ch.": "CH"
+            };
+
+            const words = rest.split(/\s+/);
+            const normWords = words.map(w => {
+                const lw = w.toLowerCase();
+                if (repl[lw]) return repl[lw];
+                return w;
+            });
+
+            const restNorm = normWords.join(" ");
+            const full = civic ? (civic + " " + restNorm).toUpperCase() : streetLine.toUpperCase();
+
+            return { full, civic, rest: restNorm };
+        }
+
+        function parseCityProvPostal(cityLine) {
+            // Expect something like: CityName ON A1B 2C3
+            const trimmed = cityLine.trim();
+            const re = /^(.+?)\s+([A-Za-z]{2})\s+([A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d)$/;
+            const m = trimmed.match(re);
+            if (!m) return null;
+            return {
+                city: m[1].trim().toUpperCase(),
+                prov: m[2].toUpperCase(),
+                postal: m[3].toUpperCase().replace(/\s+/, " ")
+            };
+        }
+
+        function parseSingleBlock(blockText) {
+            let lines = blockText.split(/\r?\n/).map(l => l.trim());
+            lines = lines.filter(l => l.length > 0);
+            if (lines.length === 0) return "";
+
+            // Remove "Canada" lines (case-insensitive)
+            lines = lines.filter(l => l.toLowerCase() !== "canada");
+
+            if (lines.length === 0) {
+                return "";
+            }
+
+            // Find the last line that matches city/prov/postal; ignore any lines after it (e.g., phone)
+            let cityIndex = -1;
+            let cp = null;
+            for (let i = lines.length - 1; i >= 0; i--) {
+                const parsed = parseCityProvPostal(lines[i]);
+                if (parsed) {
+                    cityIndex = i;
+                    cp = parsed;
+                    break;
+                }
+            }
+
+            if (cityIndex === -1 || !cp) {
+                // Can't parse city/prov/postal; return original block
+                return lines.join("\n");
+            }
+
+            const cityProvPostal = cp.city + " " + cp.prov + "  " + cp.postal; // double space before postal
+
+            // Lines above cityIndex are potential name/street/unit/etc.
+            let above = lines.slice(0, cityIndex);
+
+            let name = null;
+            let unit = null;
+            let streetLine = null;
+            let extraStreetPieces = [];
+
+            for (const raw of above) {
+                const trimmed = raw.trim();
+                if (!trimmed) continue;
+
+                // CASE1: pattern like "9-31491 SPUR AVE" => unit 9, civic 31491, rest "SPUR AVE"
+                const hyphenMatch = trimmed.match(/^(\d+)\s*-\s*(\d+)\s+(.+)$/);
+                if (hyphenMatch) {
+                    const hyUnit = hyphenMatch[1];
+                    const hyCivic = hyphenMatch[2];
+                    const hyRest = hyphenMatch[3];
+                    if (unit === null) {
+                        unit = hyUnit;
+                    }
+                    if (!streetLine) {
+                        streetLine = hyCivic + " " + hyRest;
+                    }
+                    continue; // handled this line
+                }
+
+                // Explicit unit detection (Unit #, Apt, Suite, etc.)
+                const explicitUnit = extractUnit(trimmed);
+                if (explicitUnit && unit === null) {
+                    unit = explicitUnit;
+                    continue;
+                }
+
+                // CASE2: standalone numeric line like "303" or "9." => treat as unit if none yet
+                if (/^\d+\.?$/.test(trimmed)) {
+                    const num = trimmed.replace(/\D/g, ""); // strip any trailing dot
+
+                    if (unit === null) {
+                        // If we don't have a unit yet, use this as the unit
+                        unit = num;
+                    } else if (unit === num) {
+                        // If it's the same as the existing unit (like extra "9" line), ignore it
+                        // Do nothing
+                    } else if (!streetLine) {
+                        // Weird case: numeric line and no street yet — treat as street
+                        streetLine = trimmed;
+                    } else {
+                        // Extra numeric junk, append as extra piece if you really want
+                        extraStreetPieces.push(trimmed);
+                    }
+                    continue;
+                }
+
+                // Street: first line that starts with a number (civic)
+                const firstToken = trimmed.split(/\s+/)[0];
+                if (!streetLine && /^\d+$/.test(firstToken)) {
+                    streetLine = trimmed;
+                    continue;
+                }
+
+                // Name: first non-numeric line that isn't recognized as unit/street
+                if (!name && !/\d/.test(trimmed)) {
+                    name = raw; // keep original case
+                    continue;
+                }
+
+                // If we already have a street line, extra fragments can be appended
+                if (streetLine) {
+                    extraStreetPieces.push(trimmed);
+                }
+                // Other lines are ignored.
+            }
+
+            if (extraStreetPieces.length > 0) {
+                streetLine = (streetLine ? streetLine + " " : "") + extraStreetPieces.join(" ");
+            }
+
+            const ns = streetLine ? normalizeStreet(streetLine) : { full: "", civic: null, rest: null };
+
+            // Build output: name (if any), then street, then city/prov/postal
+            if (!ns.full) {
+                // If we don't have a street, just return the original block
+                return lines.join("\n");
+            }
+
+            let outputLines = [];
+
+            if (name) {
+                outputLines.push(name);
+            }
+
+            if (unit) {
+                // Unit-first style: 24- 40 SUMMERCREST DR (dash + space)
+                outputLines.push((unit + "- " + ns.full).toUpperCase());
+            } else {
+                outputLines.push(ns.full.toUpperCase());
+            }
+
+            outputLines.push(cityProvPostal);
+
+            return outputLines.join("\n");
+        }
+
+        function formatAll(content) {
+            // Split addresses on blank lines (2+ line breaks)
+            const blocks = content
+                .split(/\n{2,}|\r{2,}|\r\n{2,}/)
+                .map(b => b.trim())
+                .filter(b => b.length > 0);
+
+            const formattedBlocks = blocks.map(parseSingleBlock);
+            return formattedBlocks.join("\n\n");
+        }
+
+        // --- UI wiring ---
+
+        const dropZone = document.getElementById("dropZone");
+        const fileInput = document.getElementById("fileInput");
+        const inputText = document.getElementById("inputText");
+        const outputText = document.getElementById("outputText");
+        const formatBtn = document.getElementById("formatBtn");
+        const downloadBtn = document.getElementById("downloadBtn");
+        const statusEl = document.getElementById("status");
+        const exportWordBtn = document.getElementById("exportWordBtn");
+
+        function setStatus(msg) {
+            statusEl.textContent = msg || "";
+        }
+
+        function handleFiles(files) {
+            const file = files[0];
+            if (!file) return;
+            if (!file.name.toLowerCase().endsWith(".txt")) {
+                alert("Please upload a .txt file.");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                inputText.value = e.target.result;
+                setStatus("Loaded file: " + file.name);
+            };
+            reader.readAsText(file, "utf-8");
+        }
+
+        dropZone.addEventListener("dragover", function (e) {
+            e.preventDefault();
+            dropZone.classList.add("dragover");
+        });
+
+        dropZone.addEventListener("dragleave", function () {
+            dropZone.classList.remove("dragover");
+        });
+
+        dropZone.addEventListener("drop", function (e) {
+            e.preventDefault();
+            dropZone.classList.remove("dragover");
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                handleFiles(e.dataTransfer.files);
+                e.dataTransfer.clearData();
+            }
+        });
+
+        fileInput.addEventListener("change", function () {
+            if (fileInput.files && fileInput.files.length > 0) {
+                handleFiles(fileInput.files);
+            }
+        });
+
+        formatBtn.addEventListener("click", function () {
+            const content = inputText.value;
+            if (!content.trim()) {
+                alert("Please paste some addresses or load a file first.");
+                return;
+            }
+            const result = formatAll(content);
+            outputText.value = result;
+
+            const hasResult = !!result.trim();
+            downloadBtn.disabled = !hasResult;
+            exportWordBtn.disabled = !hasResult;
+
+            const blocks = hasResult ? result.split(/\n{2,}/).filter(b => b.trim().length > 0).length : 0;
+            setStatus("Formatted " + blocks + " address block(s).");
+        });
+
+        downloadBtn.addEventListener("click", function () {
+            const text = outputText.value;
+            if (!text.trim()) return;
+
+            const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "formatted_addresses.txt";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+
+        exportWordBtn.addEventListener("click", function () {
+            const text = outputText.value;
+            if (!text.trim()) return;
+
+            // Split into address blocks on blank lines
+            const blocks = text
+                .split(/\n{2,}|\r{2,}|\r\n{2,}/)
+                .map(b => b.trim())
+                .filter(b => b.length > 0);
+
+            // Convert each block into a <p> with <br> between lines.
+            // Add two blank lines between blocks via extra <p>.
+            let bodyHtml = "";
+
+            blocks.forEach((block, idx) => {
+                const lines = block.split(/\r?\n/);
+                const safeLines = lines.map(l =>
+                    l
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                );
+
+                bodyHtml += "<p>";
+                bodyHtml += safeLines.join("<br>");
+                bodyHtml += "</p>";
+
+                // Two blank lines between entries, except after the last
+                if (idx !== blocks.length - 1) {
+                    bodyHtml += "<p>&nbsp;</p><p>&nbsp;</p>";
+                }
+            });
+
+            const docHtml =
+                '<!DOCTYPE html>' +
+                '<html><head><meta charset="UTF-8">' +
+                "<title>Addresses</title>" +
+                "</head><body " +
+                'style="font-family: Arimo, sans-serif; font-size: 12pt;">' +
+                bodyHtml +
+                "</body></html>";
+
+            const blob = new Blob(["\ufeff" + docHtml], {
+                type: "application/msword;charset=utf-8"
+            });
+
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "formatted_addresses.doc";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+    </script>
+</body>
+
+</html>
