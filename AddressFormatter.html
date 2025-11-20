@@ -124,7 +124,7 @@
         <div class="btn-row">
             <button id="formatBtn">Format Addresses</button>
             <button id="downloadBtn" class="secondary" disabled>Download Result (.txt)</button>
-            <button id="exportWordBtn" class="secondary" disabled>Export to Word (.doc)</button>
+            <button id="exportWordBtn" class="secondary" disabled>Export to Word (.rtf)</button>
         </div>
 
         <p><strong>Formatted Output</strong></p>
@@ -229,7 +229,11 @@
                 "south": "S",
                 "rue": "RUE",         // keep RUE as-is (FR)
                 "chemin": "CH",
-                "ch.": "CH"
+                "ch.": "CH",
+                "cres": "Cres",
+                "cres.": "Cres",
+                "crescent": "Cres",
+                "crescent.": "Cres",
             };
 
             const words = rest.split(/\s+/);
@@ -495,52 +499,59 @@
             const text = outputText.value;
             if (!text.trim()) return;
 
-            // Split into address blocks on blank lines
+            // Split into address blocks separated by blank lines
             const blocks = text
                 .split(/\n{2,}|\r{2,}|\r\n{2,}/)
                 .map(b => b.trim())
                 .filter(b => b.length > 0);
 
-            // Convert each block into a <p> with <br> between lines.
-            // Add two blank lines between blocks via extra <p>.
-            let bodyHtml = "";
+            // Helper: escape RTF special chars
+            function rtfEscape(s) {
+                return s
+                    .replace(/\\/g, "\\\\")  // backslash
+                    .replace(/{/g, "\\{")    // left brace
+                    .replace(/}/g, "\\}");   // right brace
+            }
+
+            // Start RTF document
+            let rtf = "{\\rtf1\\ansi\n";
+            rtf += "{\\fonttbl{\\f0 Arimo;}}\n";
+            rtf += "\\paperw5760\\paperh8640\\margl720\\margr720\\margt720\\margb720\n"; // 0.5\" margins
+            rtf += "\\f0\\fs24\n"; // Arimo, 12pt
 
             blocks.forEach((block, idx) => {
                 const lines = block.split(/\r?\n/);
-                const safeLines = lines.map(l =>
-                    l
-                        .replace(/&/g, "&amp;")
-                        .replace(/</g, "&lt;")
-                        .replace(/>/g, "&gt;")
-                );
 
-                bodyHtml += "<p>";
-                bodyHtml += safeLines.join("<br>");
-                bodyHtml += "</p>";
+                lines.forEach((line) => {
+                    const escaped = rtfEscape(line);
+                    rtf += escaped + "\\line\n";
+                });
 
-                // Two blank lines between entries, except after the last
+                // Between blocks:
+                // - after every 5th block: start a NEW PAGE
+                // - otherwise: just add blank spacing between labels
                 if (idx !== blocks.length - 1) {
-                    bodyHtml += "<p>&nbsp;</p><p>&nbsp;</p>";
+                    if ((idx + 1) % 5 === 0) {
+                        // force next label onto a new page
+                        rtf += "\\page\n";
+                    } else {
+                        // extra blank line spacing between labels on same page
+                        rtf += "\\line\n";
+                        rtf += "\\line\n";
+                    }
                 }
             });
 
-            const docHtml =
-                '<!DOCTYPE html>' +
-                '<html><head><meta charset="UTF-8">' +
-                "<title>Addresses</title>" +
-                "</head><body " +
-                'style="font-family: Arimo, sans-serif; font-size: 12pt;">' +
-                bodyHtml +
-                "</body></html>";
+            rtf += "}";
 
-            const blob = new Blob(["\ufeff" + docHtml], {
-                type: "application/msword;charset=utf-8"
+            const blob = new Blob([rtf], {
+                type: "application/rtf;charset=utf-8"
             });
 
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = "formatted_addresses.doc";
+            a.download = "formatted_addresses.rtf";
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
