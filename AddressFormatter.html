@@ -321,22 +321,28 @@
                 }
 
                 // NEW CASE: inline unit inside street line, e.g. "235 FORUM DR UNIT 64"
-                const inlineUnitMatch = trimmed.match(/\b(?:unit|apt|suite)\s*#?\s*(\d+)\b/i);
+                let inlineUnitMatch = trimmed.match(/\b(?:unit|apt|suite)\s*#?\s*(\d+)\b/i);
                 if (inlineUnitMatch) {
                     const num = inlineUnitMatch[1];
 
-                    // set unit if none yet
                     if (unit === null) {
                         unit = num;
                     }
 
-                    // remove the inline "UNIT 64" so only the actual street remains
-                    trimmed =
+                    // Remove the inline "UNIT 64" portion
+                    let rest =
                         (
                             trimmed.slice(0, inlineUnitMatch.index) +
                             " " +
                             trimmed.slice(inlineUnitMatch.index + inlineUnitMatch[0].length)
                         ).trim();
+
+                    // If the leftover does NOT start with a civic number, discard it (BUZZER codes, notes, etc)
+                    if (!/^\d+\s+/.test(rest)) {
+                        trimmed = ""; // nothing useful left
+                    } else {
+                        trimmed = rest;
+                    }
                 }
 
                 // Explicit unit detection (Unit #, Apt, Suite, etc.)
