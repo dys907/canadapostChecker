@@ -556,8 +556,23 @@
                 const lines = block.split(/\r?\n/);
 
                 lines.forEach((line) => {
-                    const escaped = rtfEscape(line);
-                    rtf += escaped + "\\line\n";
+                    let outLine = line;
+
+                    // Replace the DOUBLE space between province and postal with:
+                    // one normal space + a Unicode narrow no-break space (U+202F)
+                    // We'll insert a placeholder first so rtfEscape doesn't mangle it.
+                    outLine = outLine.replace(
+                        /([A-Z]{2})\s\s([A-Z]\d[A-Z]\s?\d[A-Z]\d)$/,
+                        "$1 __NARROW__$2"
+                    );
+
+                    const escaped = rtfEscape(outLine);
+
+                    // Now swap placeholder for actual RTF unicode space.
+                    // \u8239? = U+202F NARROW NO-BREAK SPACE, fallback "?" ignored by Word.
+                    const finalLine = escaped.replace(/__NARROW__/g, "\\u8239?");
+
+                    rtf += finalLine + "\\line\n";
                 });
 
                 // Between blocks:
